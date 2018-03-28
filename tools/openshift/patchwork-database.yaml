@@ -1,0 +1,99 @@
+#
+# These are Kubernetes/Openshift objects for the Patchworks Postgresql
+# database. A pod that runs the database, and a service that makes it
+# known to other pods running in the project.
+#
+# This depends on two other things being setup first:
+#  - patchwork-secrets.yaml: The secrets we use for config/auth of database
+#  - patchwork-storage.yaml: The persistent storage where we place the data
+#
+apiVersion: v1
+kind: List
+items:
+
+# This is the Pod that runs the actual postgresql database
+# It uses a standard RHEL based Postgresql container image
+# A Pod can have multiple containers, although this only has one
+ - kind: Pod
+   metadata:
+     name: patchwork-postgresql
+     # Labels help us select objects (see Service below)
+     labels:
+       patchwork: database
+   spec:
+     dnsPolicy: ClusterFirst
+     restartPolicy: Always
+     containers:
+      - name: postgresql
+        image: registry.access.redhat.com/rhscl/postgresql-96-rhel7
+        # Enable the following line if postgres fails to start and you want to shell in
+        # command: [ "/bin/sh", "-c", "sleep 200000" ]
+        # These are the ports that the container exposes
+        ports:
+         - containerPort: 5432
+           protocol: TCP
+        # These are volumes that the container mounts. See the volumes
+        # section below for matching volumes
+        volumeMounts:
+         - name: postgresql-data
+           mountPath: /var/lib/pgsql/data
+        # These are the environment variables exposed to the container
+        # Some of these come from the secrets in patchwork-secrets.yaml
+        # Don't change these unless you destroy/recreate patchwork-storage.yaml
+        env:
+         - name: POSTGRESQL_USER
+           valueFrom:
+             secretKeyRef:
+               key: postgresql-user
+               name: patchwork-secrets
+         - name: POSTGRESQL_PASSWORD
+           valueFrom:
+             secretKeyRef:
+               key: postgresql-password
+               name: patchwork-secrets
+         - name: POSTGRESQL_DATABASE
+           value: patchwork
+        # These are the probes to see whether the database is working or not.
+        livenessProbe:
+          exec:
+            command: [ "/usr/libexec/check-container", "--live" ]
+          initialDelaySeconds: 120,
+          timeoutSeconds": 30
+        readinessProbe":
+          exec:
+            command: [ "/usr/libexec/check-container" ]
+        initialDelaySeconds: 5
+        timeoutSeconds: 1
+     # Tell the pod which volumes we need for the containers
+     volumes:
+      - name: postgresql-data
+        persistentVolumeClaim:
+          claimName: patchwork-postgresql
+     # The container will be run as a random user. In order to have access to
+     # the stored data on the volume mount, we tell the containers to use
+     # additional UNIX groups. The above volumes will be setup with these groups
+     securityContext:
+       supplementalGroups: [5555]
+       fsGroup: 5555
+
+# Here is a Service that exposes the above postgresql Pod
+# to other pods in the same project. See patchwork-web.yaml for
+# a pod that uses this.
+ - kind: Service
+   metadata:
+     name: patchwork-postgresql
+     labels:
+       patchwork: database
+   spec:
+     # Here we describe the port to expose
+     ports:
+      - name: postgresql
+        nodePort: 0
+        port: 5432
+        protocol: TCP
+        targetPort: 5432
+     # This selector matches the Pod's labels
+     selector:
+       patchwork: database
+     sessionAffinity: None
+     type: ClusterIP
